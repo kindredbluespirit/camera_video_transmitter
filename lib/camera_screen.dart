@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:path/path.dart' show join;
-import 'package:path_provider/path_provider.dart';
+import 'package:web_socket_channel/io.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 class CameraScreen extends StatefulWidget {
   @override
@@ -13,6 +15,8 @@ class _CameraScreenState extends State<CameraScreen> {
   CameraController? controller;
   List<CameraDescription>? cameras;
   late CameraDescription firstCamera;
+  bool isStreaming = false;
+  late WebSocketChannel channel;
 
   @override
   void initState() {
@@ -23,7 +27,8 @@ class _CameraScreenState extends State<CameraScreen> {
         firstCamera = cameras!.first;
         controller = CameraController(
           firstCamera,
-          ResolutionPreset.high,
+          ResolutionPreset.medium,
+          enableAudio: false,
         );
         controller?.initialize().then((_) {
           if (!mounted) {
@@ -33,12 +38,54 @@ class _CameraScreenState extends State<CameraScreen> {
         });
       }
     });
+    connectToServer();
+  }
+
+  void connectToServer() {
+    channel = IOWebSocketChannel.connect('ws://172.16.29.248:8888');
   }
 
   @override
   void dispose() {
     controller?.dispose();
+    channel.sink.close();
     super.dispose();
+  }
+
+  Future<void> startVideoStreaming() async {
+    if (!controller!.value.isInitialized) {
+      return;
+    }
+    if (isStreaming) {
+      return;
+    }
+    setState(() {
+      isStreaming = true;
+    });
+
+    controller?.startImageStream((CameraImage image) {
+      if (!isStreaming) return;
+      final bytes = concatenatePlanes(image.planes);
+      channel.sink.add(bytes);
+    });
+  }
+
+  Future<void> stopVideoStreaming() async {
+    if (!controller!.value.isStreamingImages) {
+      return;
+    }
+    setState(() {
+      isStreaming = false;
+    });
+    await controller?.stopImageStream();
+  }
+
+  Uint8List concatenatePlanes(List<Plane> planes) {
+    final WriteBuffer allBytes = WriteBuffer();
+    for (Plane plane in planes) {
+      allBytes.putUint8List(plane.bytes);
+    }
+    return allBytes.done().buffer.asUint8List();
   }
 
   @override
@@ -60,14 +107,8 @@ class _CameraScreenState extends State<CameraScreen> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 IconButton(
-                  icon: Icon(Icons.camera_alt),
-                  onPressed: () async {
-                    try {
-                      await controller?.takePicture();
-                    } catch (e) {
-                      print(e);
-                    }
-                  },
+                  icon: Icon(isStreaming ? Icons.stop : Icons.videocam),
+                  onPressed: isStreaming ? stopVideoStreaming : startVideoStreaming,
                 ),
               ],
             ),
